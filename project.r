@@ -13,9 +13,9 @@ library(corrplot)
 library(caret)
 
 #Load in datasets
-cb_data <- read.csv("bcodmo_dataset_773466_712b_5843_9069.csv", header = T, na.strings = "NaN")[-1,]
-aq_data <- read.csv("aquaculture-farmed-fish-production.csv", header = T)
-un_kba_data <- read.csv("UN_kbas_data.csv", header = T)
+cb_data <- read.csv("data/bcodmo_dataset_773466_712b_5843_9069.csv", header = T, na.strings = "NaN")[-1,]
+aq_data <- read.csv("data/aquaculture-farmed-fish-production.csv", header = T)
+un_kba_data <- read.csv("data/UN_kbas_data.csv", header = T)
 
 #-------------------------------------
 #Data cleaning for Coral Bleaching data
@@ -98,100 +98,147 @@ first_merge <- cb_data_merge %>% inner_join(aq_data_sorted, by=c("Country_Name",
 
 full_data <- first_merge %>% inner_join(un_kba_reformat, by=c("Country_Name", "Year")) %>%
   rename(aquaculture_production=Aquaculture.production..metric.tons.)#merge all three datasets
+
+full_data <- full_data %>% select(-ends_with("Deviation")) %>%
+  select(-ends_with("Maximum")) %>% select(-ends_with("Minimum"))
+
 head(full_data)
+
+
 
 #--------------------------------
 #EDA
 #--------------------------------
-full_data_numeric = subset(full_data, select = -c(Country_Name, Year, Ocean)) #get numeric data
+full_data_numeric = subset(full_data, select = -c(Country_Name, Ocean, SSTA_Mean)) #get numeric data
 
-ggplot(data = full_data, aes(x="Average_Bleaching")) + geom_histogram(na.rm = TRUE)
-hist(full_data$Average_Bleaching)
-hist(full_data$Temperature_Mean)
+mean_data_aq <- group_by(full_data_numeric, Year) %>% summarise(Average_Bleaching=mean(Average_Bleaching, na.rm=TRUE))
+ggplot(data = mean_data_aq, aes(x=Year, y=Average_Bleaching)) + geom_line(color="Blue") + geom_point(color="Blue") + labs(title="Average Bleaching per Year", y="Average Bleaching (%)")
+
+mean_data_kba <- group_by(full_data_numeric, Year) %>% summarise(KBA_value=mean(KBA_value, na.rm=TRUE))
+ggplot(data = mean_data_kba, aes(x=Year, y=KBA_value)) + geom_line(color="Green") + geom_point(color="Green") + labs(title="Average KBA per Year", y="Average KBA (%)")
 
 
-ggplot(data = full_data, aes(x=Year, y=aquaculture_production)) + geom_line()
+par(mfrow=c(2,2))
+hist(full_data_numeric$Temperature_Mean, col = c("Red"))
+hist(full_data_numeric$Windspeed, col = c("Green"))
+hist(full_data_numeric$SSTA, col = c("Blue"))
+hist(full_data_numeric$depth, col = c("Black"))
 
 boxplot(full_data$KBA_value)
+ggplot(data=full_data, aes(KBA_value, depth, Windspeed, Average_Bleaching)) + geom_boxplot()
 
-cormatrix <- cor(full_data_numeric)
-corrplot(cormatrix)
+cormatrix <- cor(full_data_numeric, use = "pairwise.complete.obs")
+corrplot(cormatrix, title="Correlation Matrix", method = "circle")
 
 
 #-------------------------------
 #Modeling
 #-------------------------------
+set.seed(123)
 trControl <- trainControl(method = "repeatedcv", number = 10, repeats = 3)
+full_data_numeric <- full_data_numeric[complete.cases(full_data_numeric),]
 
+split <- sample(1:nrow(full_data_numeric), size = round(0.7 * nrow(full_data_numeric)), replace=F)
+train <- full_data_numeric[split,]
+test <- full_data_numeric[-split,]
 #-------------------------------
 #Linear regression analysis
 #-------------------------------
 
-reg1 <- lm(Average_Bleaching~., data=full_data_numeric) #bleaching on all variables
+reg1 <- lm(Average_Bleaching~., data=train) #bleaching on all variables
 summary(reg1)
 
-reg2 <- lm(aquaculture_production~Average_Bleaching, data=full_data_numeric) #bleaching on aquaculutre
-summary(reg2)
+reg2 <- lm(KBA_value~., data=train) #bleaching on kba value
+summary(reg1)
 
-reg3 <- lm(KBA_value~Average_Bleaching, data=full_data_numeric) #bleaching on kba value
+reg3 <- lm(aquaculture_production~., data=train) #bleaching on aquaculutre
 summary(reg3)
 
+
+
+summary(lm(aquaculture_production~Average_Bleaching, data=train))
+summary(lm(KBA_value~Average_Bleaching, data=train))
 
 #-------------------------------
 #Decision tree regression
 #-------------------------------
-dtree_kba <- rpart(KBA_value~Average_Bleaching, data=full_data_numeric, method = "anova") #bleaching on kba value
-rpart.plot(dtree_kba)
 
-dtree_aq <- rpart(aquaculture_production~Average_Bleaching, data=full_data_numeric, method = "anova") #bleaching on kba value
-rpart.plot(dtree_aq)
+dtree_kba <- train(KBA_value~., data = full_data_numeric, method="rpart", trControl=trControl)
+rpart.plot(dtree_kba$finalModel)
+
+dtree_aq <- train(aquaculture_production~., data = full_data_numeric, method="rpart", trControl=trControl)
+rpart.plot(dtree_aq$finalModel)
 
 #-------------------------------
 #Support Vector Regression
 #-------------------------------
 library(e1071)
-full_data_numeric <- full_data_numeric[complete.cases(full_data_numeric),]
-svmmodel_kba <- svm(KBA_value~Average_Bleaching, data = full_data_numeric)
-pred_kba <- predict(svmmodel_kba, full_data_numeric)
-plot(full_data_numeric$Average_Bleaching, pred_kba)
 
-svmmodel_aq <- svm(aquaculture_production~Average_Bleaching, data = full_data_numeric)
-pred_aq <- predict(svmmodel_aq, full_data_numeric)
-plot(full_data_numeric$Average_Bleaching, pred_aq)
+svmmodel_kba <- train(KBA_value~., data = full_data_numeric, method="svmLinear2", trControl=trControl)
+svmmodel_kba
+
+svmmodel_aq <- train(aquaculture_production~., data = full_data_numeric, method="svmLinear2", trControl=trControl)
+svmmodel_aq
 
 
 
 #-------------------------------
-#KNN analysis
+#Predictions
 #-------------------------------
-full_data$Average_Bleaching_Class <- as.factor(cut(full_data$Average_Bleaching, br=c(-5, 5, 20, 80), labels = c("low", "med", "high")))
-knn_data <- full_data[4:41]
-knn_data$Average_Bleaching <- NULL
-knn_data <- knn_data[complete.cases(knn_data),]
-#normalize <- function(x) {
-#  return ((x - min(x)) / (max(x) - min(x)))
-#}
-#knn_data[4:39] <- as.data.frame(lapply(knn_data[4:39], normalize))
-#summary(knn_data$depth)
-ind <- sample(2, nrow(knn_data), replace=TRUE, prob=c(0.7, 0.3))
-KNNtrain <- knn_data[ind==1,]
-KNNtest <- knn_data[ind==2,]
+#par(mfrow=c(3,1))
+library(cowplot)
 
-KNNpred <- knn(train = KNNtrain[1:36], test = KNNtest[1:36], cl = KNNtrain$Average_Bleaching_Class, k = 14)
-KNNpred
-table(KNNpred)
+#predictions for linear regression
+pred_reg1 <- predict(reg1, test)
+varImp(reg1) #view variable importance
+
+pred_reg2 <- predict(reg2, test)
+varImp(reg2)
+
+pred_reg3 <- predict(reg3, test)
+varImp(reg3)
+#plotting predictions
+lr1 <- qplot(Average_Bleaching, pred_reg1, colour=Year, data=test)
+lr2 <- qplot(KBA_value, pred_reg2, colour=Average_Bleaching, data=test)
+lr3 <- qplot(aquaculture_production, pred_reg3, colour=Average_Bleaching, data=test)
+plot_grid(lr1, lr2, lr3, labels=c("Fit 1" ,"Fit 2", "Fit 3"))
+
+#predictions for decision trees and ploting
+pred_dt1 <- predict(dtree_kba, test)
+pred_dt2 <- predict(dtree_aq, test)
+dt1 <- qplot(KBA_value, pred_dt1, colour=Average_Bleaching, data=test)
+dt2 <- qplot(aquaculture_production, pred_dt2, colour=Average_Bleaching, data=test)
+plot_grid(dt1, dt2, labels=c("Fit 1" ,"Fit 2"))
+
+#predictions for svm regression and plotting
+pred_svm1 <- predict(svmmodel_kba, test)
+pred_svm2 <- predict(svmmodel_aq, test)
+svm1 <- qplot(KBA_value, pred_svm1, colour=Average_Bleaching, data=test)
+svm2 <- qplot(aquaculture_production, pred_svm2, colour=Average_Bleaching, data=test)
+plot_grid(svm1, svm2, labels=c("Fit 1" ,"Fit 2"))
+
 
 #-------------------------------
 #Kmeans clustering analysis
 #-------------------------------
+#plot bleaching class
+full_data$Average_Bleaching_Class <- as.factor(cut(full_data$Average_Bleaching, br=c(-5, 5, 20, 80), labels = c("low", "med", "high")))
 ggplot(full_data, aes(KBA_value, aquaculture_production, color=Average_Bleaching_Class)) + geom_point(size=3)
-set.seed(100)
-kmeans_data <- subset(knn_data, select = -c(SSTA_Mean))
-dataClusters <- kmeans(kmeans_data[,1:35], 3, nstart=20)
-print(dataClusters)
-table(dataClusters$cluster, kmeans_data$Average_Bleaching_Class)
-clusplot(kmeans_data,dataClusters$cluster, color = TRUE, shade = TRUE, labels = 0, lines = 0)
 
+#Perform kmeans
+norm_data <- scale(na.omit(full_data_numeric))
+within <- (nrow(norm_data)-1)*sum(apply(norm_data,2,var)) #find number of wss
+for (i in 2:5) within[i] <- sum(kmeans(norm_data, centers=i)$withinss)
+plot(1:5, within, type="b", xlab="Number of Clusters", ylab="WSS") 
+
+set.seed(100)
+kmeans_cluster <- kmeans(norm_data, 3) #using kmeans function
+aggregate(norm_data,by=list(kmeans_cluster$cluster),FUN=mean)
+norm_data <- data.frame(norm_data, kmeans_cluster$cluster)
+
+#plot clusters
+clusplot(norm_data, kmeans_cluster$cluster, color=TRUE, shade=TRUE,
+         labels=2, lines=0)
 
 
 

@@ -63,26 +63,26 @@ names(aq_data_sorted)[names(aq_data_sorted) == "Entity"] <- "Country_Name"
 #view data
 head(un_kba_data)
 str(un_kba_data)
-un_kba_data <- un_kba_data[, 15:length(colnames(un_kba_data))]
-un_kba_data <- un_kba_data[un_kba_data$type == "Country",]
-un_kba_data <- un_kba_data[order(un_kba_data$geoAreaName),]
+un_kba_data <- un_kba_data[, 15:length(colnames(un_kba_data))] #select only needed columns
+un_kba_data <- un_kba_data[un_kba_data$type == "Country",] #select only country types
+un_kba_data <- un_kba_data[order(un_kba_data$geoAreaName),] #order countries
 rownames(un_kba_data) <- NULL
-names(un_kba_data)[names(un_kba_data) == "geoAreaName"] <- "Country_Name"
+names(un_kba_data)[names(un_kba_data) == "geoAreaName"] <- "Country_Name" #rename column
 
 #reformat dataset
 years <- seq(2000, 2019, by=1)
-un_kba_reformat <- data.frame(Year = rep(years, times=nrow(un_kba_data)))
-un_kba_reformat$Country_Name <- rep(un_kba_data$Country_Name, each=length(years))
-un_kba_reformat$KBA_value <- 0
+un_kba_reformat <- data.frame(Year = rep(years, times=nrow(un_kba_data))) 
+un_kba_reformat$Country_Name <- rep(un_kba_data$Country_Name, each=length(years)) #years for country
+un_kba_reformat$KBA_value <- 0 #initialize value
 
 kba_values <- un_kba_data %>% 
   select(-starts_with("lowerbound")) %>%
   select(-starts_with("upperbound")) %>%
-  select(starts_with("value_"))
-kba_values$Country_Name <- un_kba_data$Country_Name
+  select(starts_with("value_")) #subset data
+kba_values$Country_Name <- un_kba_data$Country_Name #add country names
 
 year <- 2000
-for(i in 1:nrow(un_kba_reformat)) {
+for(i in 1:nrow(un_kba_reformat)) { #add kba value
   un_kba_reformat$KBA_value[i] <- kba_values[(kba_values$Country_Name == un_kba_reformat$Country_Name[i]), colnames(kba_values)[grepl(as.character(year), colnames(kba_values))]]
   if(year == 2019) year = 2000 else year = year + 1
 }
@@ -100,7 +100,7 @@ full_data <- first_merge %>% inner_join(un_kba_reformat, by=c("Country_Name", "Y
   rename(aquaculture_production=Aquaculture.production..metric.tons.)#merge all three datasets
 
 full_data <- full_data %>% select(-ends_with("Deviation")) %>%
-  select(-ends_with("Maximum")) %>% select(-ends_with("Minimum"))
+  select(-ends_with("Maximum")) %>% select(-ends_with("Minimum")) #subset data
 
 head(full_data)
 
@@ -111,22 +111,26 @@ head(full_data)
 #--------------------------------
 full_data_numeric = subset(full_data, select = -c(Country_Name, Ocean, SSTA_Mean)) #get numeric data
 
+#mean aq by year
 mean_data_aq <- group_by(full_data_numeric, Year) %>% summarise(Average_Bleaching=mean(Average_Bleaching, na.rm=TRUE))
 ggplot(data = mean_data_aq, aes(x=Year, y=Average_Bleaching)) + geom_line(color="Blue") + geom_point(color="Blue") + labs(title="Average Bleaching per Year", y="Average Bleaching (%)")
 
+#mean kba value by year
 mean_data_kba <- group_by(full_data_numeric, Year) %>% summarise(KBA_value=mean(KBA_value, na.rm=TRUE))
 ggplot(data = mean_data_kba, aes(x=Year, y=KBA_value)) + geom_line(color="Green") + geom_point(color="Green") + labs(title="Average KBA per Year", y="Average KBA (%)")
 
 
-par(mfrow=c(2,2))
+par(mfrow=c(2,2)) #histograms
 hist(full_data_numeric$Temperature_Mean, col = c("Red"))
 hist(full_data_numeric$Windspeed, col = c("Green"))
 hist(full_data_numeric$SSTA, col = c("Blue"))
 hist(full_data_numeric$depth, col = c("Black"))
 
-boxplot(full_data$KBA_value)
+#boxplots
+boxplot(full_data$KBA_value) 
 ggplot(data=full_data, aes(KBA_value, depth, Windspeed, Average_Bleaching)) + geom_boxplot()
 
+#correlation matrix
 cormatrix <- cor(full_data_numeric, use = "pairwise.complete.obs")
 corrplot(cormatrix, title="Correlation Matrix", method = "circle")
 
@@ -134,10 +138,12 @@ corrplot(cormatrix, title="Correlation Matrix", method = "circle")
 #-------------------------------
 #Modeling
 #-------------------------------
-set.seed(123)
+set.seed(123) #set random seed
+#create cross-validation
 trControl <- trainControl(method = "repeatedcv", number = 10, repeats = 3)
-full_data_numeric <- full_data_numeric[complete.cases(full_data_numeric),]
+full_data_numeric <- full_data_numeric[complete.cases(full_data_numeric),] #remove null values
 
+#create train and test sets
 split <- sample(1:nrow(full_data_numeric), size = round(0.7 * nrow(full_data_numeric)), replace=F)
 train <- full_data_numeric[split,]
 test <- full_data_numeric[-split,]
@@ -155,17 +161,17 @@ reg3 <- lm(aquaculture_production~., data=train) #bleaching on aquaculutre
 summary(reg3)
 
 
-
+#two other regression values for only one independent variable
 summary(lm(aquaculture_production~Average_Bleaching, data=train))
 summary(lm(KBA_value~Average_Bleaching, data=train))
 
 #-------------------------------
 #Decision tree regression
 #-------------------------------
-
+#kba
 dtree_kba <- train(KBA_value~., data = full_data_numeric, method="rpart", trControl=trControl)
 rpart.plot(dtree_kba$finalModel)
-
+#aq production
 dtree_aq <- train(aquaculture_production~., data = full_data_numeric, method="rpart", trControl=trControl)
 rpart.plot(dtree_aq$finalModel)
 
@@ -173,10 +179,10 @@ rpart.plot(dtree_aq$finalModel)
 #Support Vector Regression
 #-------------------------------
 library(e1071)
-
+#kba
 svmmodel_kba <- train(KBA_value~., data = full_data_numeric, method="svmLinear2", trControl=trControl)
 svmmodel_kba
-
+#aq production
 svmmodel_aq <- train(aquaculture_production~., data = full_data_numeric, method="svmLinear2", trControl=trControl)
 svmmodel_aq
 
